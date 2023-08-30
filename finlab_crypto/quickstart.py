@@ -12,6 +12,7 @@ from googleapiclient.errors import HttpError
 SCOPES = ['https://www.googleapis.com/auth/drive.metadata.readonly',
           'https://www.googleapis.com/auth/drive.file']
 
+
 def main():
     """Shows basic usage of the Drive v3 API.
     Prints the names and ids of the first 10 files the user has access to.
@@ -87,15 +88,19 @@ def main():
         # Create a new zip file of the history folder
         with zipfile.ZipFile(zip_filename, 'w') as zipf:
             for root, _, files in os.walk(folder_path):
-                for file in files:
-                    if file.lower().endswith('.csv'):
-                        file_path = os.path.join(root, file)
-                        zipf.write(file_path, os.path.relpath(file_path, folder_path))
+                # Exclude .ipynb_checkpoint folder
+                if not root.endswith(".ipynb_checkpoint"):
+                    for file in files:
+                        if file.lower().endswith('.csv'):
+                            file_path = os.path.join(root, file)
+                            zipf.write(file_path, os.path.relpath(
+                                file_path, folder_path))
 
         print("History folder zipped successfully.")
 
         # Upload the history.zip file
-        media = MediaFileUpload(zip_filename, mimetype='application/zip', resumable=True)
+        media = MediaFileUpload(
+            zip_filename, mimetype='application/zip', resumable=True)
         file_metadata = {
             'name': zip_filename,
             'parents': []  # No parent specified, uploading to root folder
@@ -112,7 +117,7 @@ def main():
                 if status:
                     print("Uploaded %d%%." % int(status.progress() * 100))
             print("Zip File uploaded:", zip_filename)
-            
+
         except HttpError as error:
             print(f'An error occurred: {error}')
 
@@ -121,46 +126,52 @@ def main():
             if file_name.lower().endswith('.csv'):
                 file_path = os.path.join(folder_path, file_name)
                 mime_type = 'application/octet-stream'
+                # Exclude .ipynb_checkpoint folder
+                if not file_path.endswith(".ipynb_checkpoint"):
+                    file_metadata = {
+                        'name': file_name,
+                        # Upload .csv files to the history folder
+                        'parents': [folder_id]
+                    }
 
-                file_metadata = {
-                    'name': file_name,
-                    'parents': [folder_id]  # Upload .csv files to the history folder
-                }
+                    # Remove existing CSV files with the same name
+                    existing_files = service.files().list(
+                        q=f"name='{file_name}' and '{folder_id}' in parents",
+                        fields="files(id)"
+                    ).execute()
+                    for existing_file in existing_files.get('files', []):
+                        try:
+                            service.files().delete(
+                                fileId=existing_file['id']).execute()
+                            print("Deleted existing CSV file:",
+                                  existing_file['id'])
+                        except HttpError as error:
+                            print(f"An error occurred while deleting: {error}")
 
-                # Remove existing CSV files with the same name
-                existing_files = service.files().list(
-                    q=f"name='{file_name}' and '{folder_id}' in parents",
-                    fields="files(id)"
-                ).execute()
-                for existing_file in existing_files.get('files', []):
+                    media = MediaFileUpload(
+                        file_path, mimetype=mime_type, resumable=True)
+
                     try:
-                        service.files().delete(fileId=existing_file['id']).execute()
-                        print("Deleted existing CSV file:", existing_file['id'])
+                        create_request = service.files().create(
+                            body=file_metadata,
+                            media_body=media
+                        )
+                        response = None
+                        while response is None:
+                            status, response = create_request.next_chunk()
+                            if status:
+                                print("Uploaded %d%%." %
+                                      int(status.progress() * 100))
+                        print("File uploaded:", file_name)
+
                     except HttpError as error:
-                        print(f"An error occurred while deleting: {error}")
-
-                media = MediaFileUpload(
-                    file_path, mimetype=mime_type, resumable=True)
-
-                try:
-                    create_request = service.files().create(
-                        body=file_metadata,
-                        media_body=media
-                    )
-                    response = None
-                    while response is None:
-                        status, response = create_request.next_chunk()
-                        if status:
-                            print("Uploaded %d%%." % int(status.progress() * 100))
-                    print("File uploaded:", file_name)
-
-                except HttpError as error:
-                    print(f'An error occurred: {error}')
+                        print(f'An error occurred: {error}')
         print("All CSV files Uploaded!")
+
     except HttpError as error:
         print(f'An error occurred2: {error}')
 
-    print("All Uploading is down!")
+    print("All Uploading is done!")
 
 
 if __name__ == '__main__':
